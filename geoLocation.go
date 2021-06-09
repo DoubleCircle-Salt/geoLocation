@@ -10,69 +10,65 @@ import (
 	geoip2 "github.com/oschwald/geoip2-golang"
 )
 
-const (
-	geoUpdateDuration = 300 * time.Second
-)
-
-var (
-	geoDatabase *geoip2.Reader
-	geoLock     sync.RWMutex
-)
-
-// Geo 结构体
-type Geo struct {
-	Enabled bool   `json:"enabled"`
-	GeoIP2  string `json:"geoip2"`
+type Reader struct {
+	*geoip2.Reader
+	sync.RWMutex
+	updateDuration time.Duration
+	path           string
 }
 
-func geoUpdate(ctx context.Context) {
+func Open(path string, updateDuration time.Duration, ctx context.Context) (*Reader, error) {
+	db, err := geoip2.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	reader := new(Reader)
+	reader.Reader = db
+	reader.updateDuration = updateDuration
+	reader.path = path
+	if reader.updateDuration > time.Duration(0) {
+		go reader.update(ctx)
+	}
+	return reader, nil
+}
+
+func (reader *Reader) update(ctx context.Context) {
 	for {
 		select {
-		case <-time.After(geoUpdateDuration):
+		case <-time.After(reader.updateDuration):
 		case <-ctx.Done():
 			return
 		}
-		geoConfig := &GetDynamicConfig().Geo
-		db, err := geoip2.Open(geoConfig.GeoIP2)
+		db, err := geoip2.Open(reader.path)
 		if err != nil {
 			fmt.Println("geoip2 read failed: ", err)
 		} else {
-			geoLock.Lock()
-			geoDatabase = db
-			geoLock.Unlock()
+			reader.Lock()
+			reader.Reader = db
+			reader.Unlock()
 		}
 	}
 }
 
-func GetGeo() *geoip2.Reader {
-	geoLock.RLock()
-	defer geoLock.RUnlock()
-	return geoDatabase
+func (reader *Reader) CountryIsoCode(ip net.IP) (string, bool) {
+	reader.RLock()
+	defer reader.RUnlock()
+	location, err := reader.Country(ip)
+	if err != nil {
+		return "", false
+	}
+	return location.Country.IsoCode, true
 }
 
-func GetCountryCity(ip net.IP) (country, city string) {
-	db := GetGeo()
-	if db == nil {
-		return
-	}
-	location, err := db.City(ip)
+func (reader *Reader) CityName(ip net.IP) (string, bool) {
+	reader.RLock()
+	defer reader.RUnlock()
+	location, err := reader.City(ip)
 	if err != nil {
-		return
+		return "", false
 	}
-	country = location.Country.IsoCode
-	if cityName, found := location.City.Names["en"]; found {
-		city = cityName
+	if city, found := location.City.Names["en"]; found {
+		return city, true
 	}
-	return
-}
-
-func init() {
-	geoConfig := &GetDynamicConfig().Geo
-	db, err := geoip2.Open(geoConfig.GeoIP2)
-	if err != nil {
-		fmt.Println("geoip2 read failed: ", err)
-	} else {
-		geoDatabase = db
-	}
-	go geoUpdate(context.Background())
+	return "", false
 }
