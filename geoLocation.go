@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,6 +59,20 @@ func (reader *Reader) CountryIsoCode(ip net.IP) (string, bool) {
 		return "", false
 	}
 	return location.Country.IsoCode, true
+}
+
+func (reader *Reader) CountryName(ip net.IP) (string, bool) {
+	reader.RLock()
+	defer reader.RUnlock()
+	location, err := reader.Country(ip)
+	if err != nil {
+		return "", false
+	}
+	if country, found := location.Country.Names["en"]; found {
+		countryWithNoSpace := strings.ReplaceAll(country, " ", "")
+		return strings.ToLower(countryWithNoSpace), true
+	}
+	return "", false
 }
 
 func (reader *Reader) CityName(ip net.IP) (string, bool) {
